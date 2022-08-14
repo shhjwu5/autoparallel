@@ -1,6 +1,9 @@
-import math
 import profile
+from urllib.parse import _NetlocResultMixinBytes
 
+import torch
+import torch.nn as nn
+import torch.distributed as dist
 
 class LayerPacket:
     def __init__(self, layer, size):
@@ -11,77 +14,61 @@ class LayerPacket:
     def get_feature(self):
         self.feature = profile.generate_features(self)
 
-
 class Task:
-    def __init__(self, layer,
-                 batch_num,
-                 task_from=None,
-                 task_to=None,
+    def __init__(self, task_id, layer_packets, batch_num,
+                 task_from=[],task_to=[],
                  ):
-        """
-        Here, all tasks are treated as if they are linearly relied on each other.
-        So task_from and task_to should be traversed as soon as the task_list grows to a graph.
-        All tasks are organized in a dict:
-        {
-            "task_num": task
-        }
-        and task_from/task_to only store the key "task_num"
-        """
-
-        if task_to is None:
-            self.task_to = []
-        else:
-            self.task_to = [task_to]
-        if task_from is None:
-            self.task_from = []
-        else:
-            self.task_from = [task_from]
-        self.layer = layer
+        self.task_id = task_id
+        self.layers = [layer_packet.layer for layer_packet in layer_packets]
         self.batch_num = batch_num
-        self.result_before = math.inf  # what default value should it have?
-        self.time = []
+        self.input_size = layer_packets[0].size
+        self.task_size = 0 #?所有layer_packet占用的总空间
+        self.estimate_time = 0 #? 所有layer_packet耗时的和
 
-    def get_data_from_batch(self, data):
-        if not self.task_from:
-            self.result_before = data[self.batch_num]
+        self.task_to = [task_to] if type(task_to)==int else task_to
+        self.task_from = [task_from] if type(task_from)==int else task_from
 
-    def compute(self):  # 如何确保上一个任务已经做完？
-        return self.layer.layer(self.result_before)
+        self.device = None
+        self.device_to = []
+        self.device_from = []
 
-    def pass_result(self, tasklist):
-        if not self.task_to:
-            print(self.compute())
+    def set_device(self,device_type,device_num):
+        if device_type=="from":
+            self.device_from.append(device_num)
+        elif device_type=="to":
+            self.device_to.append(device_num)
         else:
-            next_task = tasklist[self.task_to[0]]
-            next_task.result_before = self.compute()
+            self.device = device_num
+        
+    def execute(self,data):
+        if len(self.device_from)==0:
+            #self.input = self._get_batch_data()
+            self.input = data.to(torch.device("cuda:%d"%(self.device)))
+        else:
+            self.input = torch.zeros(self.input_size).to(torch.device("cuda:%d"%(self.device)))
+            recv_input = dist.irecv(self.input,src=self.device_from[0])
+            recv_input.wait()
+        
+        self.output = self.input
+        for layer in self.layers:
+            self.output = layer(self.output)
 
-    def set_time(self, hardware_name, times):
-        assert len(hardware_name) == len(times)
-        for i in range(len(times)):
-            self.time.append((hardware_name[i], times[i]))
+        if len(self.device_to)==0:
+            print(self.output)
+        else:
+            dist.isend(self.output,dst=self.device_to[0])
 
+    def _get_batch_data(self):
+        pass
+
+    def visualize(self):
+        print("Task id:",self.task_id,"\t Input size:",self.input_size,
+              "\t Device from",self.device_from,"\t Device",self.device,"\t Device to:",self.device_to)
 
 class TaskManager:
     def __init__(self):
-        self.task_list = {}
-        self.num_list = []
+        self.num_tasks = 0
+        self.tasks = {}
 
-    """
-    Here, there maybe a relying relationship when adding tasks,
-    but I don't know how is it described, so I have to ignore it.
-    """
-    def add_task(self, task):
-        if len(self.num_list) == 0:
-            self.num_list.append(len(self.task_list))
-        num = self.num_list.pop()
-        self.task_list[num] = task
-
-    def end_task(self, num):
-        self.num_list.append(num)
-        #  not finished yet
-
-    def grid_generation(self, layers, batches):
-        for i in range(len(batches)):
-            for layer in layers:
-                task = Task(layer, batch_num=i)
-                self.add_task(task)
+    def add_task(self,task):
+        self.tasks[task.task_id] = task

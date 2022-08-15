@@ -4,6 +4,7 @@ import torch
 
 from task import Task, TaskManager,Task,LayerPacket
 from infrastructure import Infrastructure,Node,Link
+from optimize import Optimize
 
 dist.init_process_group(backend="nccl")
 rank = dist.get_rank()
@@ -29,6 +30,10 @@ infrastructure = Infrastructure(nodes)
 for i in range(3):
     for j in range(i,3):
         infrastructure.add_link(i,j,Link(0.000009,32))
+
+optimizer=Optimize()
+solution=optimizer.initialsize()
+schedule=optimizer.optimize()
 
 schedule = [0,1,2]
 for task_id,cur_task in task_manager.tasks.items():

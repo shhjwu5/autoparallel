@@ -84,7 +84,6 @@ class Topology:
                     continue
         return dev_topo
 
-
 class Parallel:
     def __init__(self,Task,Infrastructure,TaskManager,Node):
         self.task_queue=Node.task_queue
@@ -150,8 +149,6 @@ class Parallel:
                         t+=self.tasks[k].time[solution[k]]+cur_device_size/bandwidth+latency
                 cur_device_size=self.tasks[k].size
         return t
-            
-
 
 class Genetic:
     def __init__(self, parallel, max_iterations):
